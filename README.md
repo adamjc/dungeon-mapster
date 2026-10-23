@@ -1,5 +1,7 @@
 # Dungeon Mapper
 
+A 100% vibe-coded project.
+
 A grid-based mapping tool for classic first-person "blobber" dungeon crawlers
 such as *Dungeon Master*, *Eye of the Beholder*, and *Lands of Lore*.
 
