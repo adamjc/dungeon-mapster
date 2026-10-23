@@ -40,6 +40,20 @@ The Room tool is additive: it never replaces an existing door with a wall, so
 drawing a room against one you have already mapped keeps the doorway between
 them intact.
 
+## Saving
+
+Your dungeon is **saved automatically** to the browser's local storage as you
+draw, and reopens when you come back. The top bar shows the current save state.
+
+Use **Export** to write the whole dungeon, including every level, to a
+`.dungeon.json` file, and **Import** to open one again. Imported files are
+validated, and a file that cannot be read is reported without disturbing the map
+you already have open.
+
+> **Back up your maps.** Browser storage is convenient but it is not a backup:
+> clearing your browsing data will delete any dungeon stored there. Export to a
+> file for anything you want to keep.
+
 ## How the map is stored
 
 Floors belong to squares; walls and doors belong to the *edges between*
@@ -63,13 +77,19 @@ src/
     coords.ts       Canonical edge addressing, hit-testing, drag sampling
     dungeon.ts      Factories for dungeons and levels
     operations.ts   Floor, wall, room and eraser edits
+  persistence/
+    storage.ts        IndexedDB reads and writes
+    serialisation.ts  Versioned JSON export and validated import
+    usePersistence.ts Debounced autosave and startup restore
+    fileTransfer.ts   Browser file download and read helpers
   state/
     editor.ts     Reducer holding the dungeon, tools, view and undo history
   components/
-    MapCanvas.tsx       SVG grid, rendering and pointer handling
-    Toolbar.tsx         Tool buttons and keyboard shortcuts
-    PropertiesPanel.tsx Editing for the current selection
-    StatusBar.tsx       Level switching, coordinates and zoom
+    MapCanvas.tsx          SVG grid, rendering and pointer handling
+    Toolbar.tsx            Tool buttons and keyboard shortcuts
+    PropertiesPanel.tsx    Editing for the current selection
+    StatusBar.tsx          Level switching, coordinates and zoom
+    DungeonFileControls.tsx Save status, new, export and import
 ```
 
 The dungeon model has no dependency on the UI, and all edits are immutable, so
@@ -77,18 +97,20 @@ undo history is just a list of previous dungeon references.
 
 ## Status
 
-Phase 1 (core editor) is complete: grid, pan and zoom, the drawing tools above,
-selection, undo/redo, and multiple levels.
+Phases 1 and 2 are complete:
+
+- **Phase 1** — grid, pan and zoom, the drawing tools above, selection,
+  undo/redo, and multiple levels.
+- **Phase 2** — autosave to browser storage, restore on startup, and versioned
+  JSON export/import.
 
 Still to come:
 
-- **Phase 2** — saving to browser storage, a dungeon library, and JSON import/export.
 - **Phase 3** — the stamp system: a catalogue of symbols such as keyholes, secret
   buttons, levers, pits, teleporters, wells, stairs, and notes. Stamps anchor
   either to a square or to a wall face, since in these games buttons and
   keyholes are mounted on walls and face into a specific square. Custom stamps
   are built from a bundled icon set and stored with the dungeon so exported maps
   stay portable.
-
-> **Note:** maps currently live only in memory and are lost on reload. Persistence
-> arrives in Phase 2.
+- **Later** — a library for managing several dungeons at once, PNG and print
+  export, a generated legend, and search across notes.

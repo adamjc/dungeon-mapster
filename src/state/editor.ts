@@ -36,6 +36,8 @@ export type EditorAction =
   | { type: 'undo' }
   | { type: 'redo' }
   | { type: 'renameDungeon'; name: string }
+  | { type: 'loadDungeon'; dungeon: Dungeon }
+  | { type: 'newDungeon' }
   | { type: 'addLevel' }
   | { type: 'selectLevel'; levelId: string }
   | { type: 'renameLevel'; levelId: string; name: string }
@@ -134,8 +136,35 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         updatedAt: new Date().toISOString(),
       });
 
-    case 'addLevel': {
-      const level = createLevel(`Level ${state.dungeon.levels.length + 1}`);
+    // Loading replaces the whole workspace, so the undo stack is cleared.
+    // Undoing across a file load would otherwise resurrect a different map.
+    case 'loadDungeon':
+      return {
+        ...state,
+        dungeon: action.dungeon,
+        activeLevelId: action.dungeon.levels[0].id,
+        selection: null,
+        past: [],
+        future: [],
+        strokeBase: null,
+        rectPreview: null,
+      };
+
+    case 'newDungeon': {
+      const dungeon = createDungeon();
+      return {
+        ...state,
+        dungeon,
+        activeLevelId: dungeon.levels[0].id,
+        selection: null,
+        past: [],
+        future: [],
+        strokeBase: null,
+        rectPreview: null,
+      };
+    }
+
+    case 'addLevel': {      const level = createLevel(`Level ${state.dungeon.levels.length + 1}`);
       const next: Dungeon = {
         ...state.dungeon,
         levels: [...state.dungeon.levels, level],

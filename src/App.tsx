@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useReducer, useState } from 'react';
+import { DungeonFileControls } from './components/DungeonFileControls';
 import { MapCanvas } from './components/MapCanvas';
 import { PropertiesPanel } from './components/PropertiesPanel';
 import { StatusBar } from './components/StatusBar';
 import { TOOL_SHORTCUTS, Toolbar } from './components/Toolbar';
-import type { Cell } from './model/types';
+import type { Cell, Dungeon } from './model/types';
+import { usePersistence } from './persistence/usePersistence';
 import { createInitialState, editorReducer } from './state/editor';
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -19,6 +21,12 @@ function isTypingTarget(target: EventTarget | null): boolean {
 export function App() {
   const [state, dispatch] = useReducer(editorReducer, undefined, createInitialState);
   const [hoveredCell, setHoveredCell] = useState<Cell | null>(null);
+
+  const handleLoaded = useCallback((dungeon: Dungeon) => {
+    dispatch({ type: 'loadDungeon', dungeon });
+  }, []);
+
+  const { status } = usePersistence({ dungeon: state.dungeon, onLoaded: handleLoaded });
 
   const handleHoverChange = useCallback((cell: Cell | null) => {
     setHoveredCell((current) => {
@@ -94,6 +102,11 @@ export function App() {
           >
             Redo
           </button>
+          <DungeonFileControls
+            dungeon={state.dungeon}
+            status={status}
+            dispatch={dispatch}
+          />
         </div>
       </header>
 
