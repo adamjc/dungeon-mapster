@@ -45,6 +45,13 @@ const TOOLS: ToolDefinition[] = [
     icon: <path d="M2 8h4v4H2zm12 0h4v4h-4zM7 5h6v10H7z" />,
   },
   {
+    id: 'stamp',
+    label: 'Stamp',
+    shortcut: 'S',
+    hint: 'Place keyholes, buttons, pits, stairs, notes and more',
+    icon: <path d="M10 2l2.4 5.2 5.6.6-4.2 3.8 1.2 5.6L10 14.4 4.99 17.2l1.2-5.6L2 7.8l5.6-.6zM3 18h14v2H3z" />,
+  },
+  {
     id: 'eraser',
     label: 'Eraser',
     shortcut: 'E',

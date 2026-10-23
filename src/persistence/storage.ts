@@ -1,4 +1,5 @@
 import type { Dungeon } from '../model/types';
+import { parseDungeonValue } from './serialisation';
 
 /**
  * Local persistence in IndexedDB.
@@ -79,6 +80,13 @@ export async function saveDungeon(dungeon: Dungeon): Promise<void> {
   });
 }
 
+export class CorruptStoredDungeonError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CorruptStoredDungeonError';
+  }
+}
+
 export async function loadCurrentDungeon(): Promise<Dungeon | null> {
   const db = await openDatabase();
   const transaction = db.transaction([DUNGEON_STORE, META_STORE], 'readonly');
@@ -88,8 +96,13 @@ export async function loadCurrentDungeon(): Promise<Dungeon | null> {
   );
   if (!id) return null;
 
-  const dungeon = await request<Dungeon | undefined>(
-    transaction.objectStore(DUNGEON_STORE).get(id),
-  );
-  return dungeon ?? null;
+  const stored = await request<unknown>(transaction.objectStore(DUNGEON_STORE).get(id));
+  if (!stored) return null;
+
+  // Stored maps may predate the current schema, so they are validated and
+  // migrated on the way in rather than being trusted as-is.
+  const result = parseDungeonValue(stored);
+  if (!result.ok) throw new CorruptStoredDungeonError(result.error);
+
+  return result.dungeon;
 }

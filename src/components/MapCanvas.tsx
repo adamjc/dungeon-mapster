@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   cellsAlongLine,
   edgesAlongLine,
@@ -8,6 +8,7 @@ import {
   pointsAlongLine,
 } from '../model/coords';
 import {
+  addStamp,
   applyErase,
   drawRoom,
   EDGE_HIT_TOLERANCE,
@@ -16,10 +17,27 @@ import {
   getEdge,
   setEdges,
   setFloors,
+  stampAnchorAt,
 } from '../model/operations';
-import type { Cell, Edge, EdgeKind, Level } from '../model/types';
+import { newId } from '../model/dungeon';
+import { resolveStamp } from '../model/stamps';
+import {
+  anchorKey,
+  layoutStamps,
+  soloPlacement,
+  stampAtPoint,
+} from '../model/stampLayout';
+import type { StampLayout } from '../model/stampLayout';
+import type {
+  Cell,
+  Dungeon,
+  Edge,
+  EdgeKind,
+  Level,
+} from '../model/types';
 import { activeLevel } from '../state/editor';
 import type { EditorAction, EditorState } from '../state/editor';
+import { MapGlyph } from './StampIcon';
 
 /** World units per dungeon square, before the view scale is applied. */
 export const CELL = 32;
@@ -46,6 +64,8 @@ interface Props {
 export function MapCanvas({ state, dispatch, onHoverChange }: Props) {
   const level = activeLevel(state);
   const { view, tool } = state;
+  const stampDefinition = resolveStamp(state.dungeon, state.activeStampId);
+  const stampLayout = useMemo(() => layoutStamps(level), [level]);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
@@ -55,20 +75,34 @@ export function MapCanvas({ state, dispatch, onHoverChange }: Props) {
   const spaceRef = useRef(false);
   const viewRef = useRef(view);
   viewRef.current = view;
+  const canvasLeftRef = useRef<number | null>(null);
 
   useLayoutEffect(() => {
     const element = containerRef.current;
     if (!element) return;
 
-    const observer = new ResizeObserver(([entry]) => {
-      setSize({
-        width: entry.contentRect.width,
-        height: entry.contentRect.height,
-      });
+    const observer = new ResizeObserver(() => {
+      const rect = element.getBoundingClientRect();
+      setSize({ width: rect.width, height: rect.height });
+
+      // Opening or closing the stamp palette moves the canvas sideways. The
+      // view shifts by the same amount so the map appears to stay still
+      // instead of jumping out from under the pointer.
+      const previousLeft = canvasLeftRef.current;
+      canvasLeftRef.current = rect.left;
+
+      if (previousLeft !== null && previousLeft !== rect.left) {
+        const current = viewRef.current;
+        dispatch({
+          type: 'setView',
+          view: { ...current, tx: current.tx + (previousLeft - rect.left) },
+        });
+      }
     });
+
     observer.observe(element);
     return () => observer.disconnect();
-  }, []);
+  }, [dispatch]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -152,12 +186,44 @@ export function MapCanvas({ state, dispatch, onHoverChange }: Props) {
 
     switch (tool) {
       case 'select': {
+        // Stamps sit on top of walls, which sit on top of the floor, so they
+        // are tested in that order.
+        const stamp = stampAtPoint(stampLayout, fx, fy);
+        if (stamp) {
+          dispatch({ type: 'select', selection: { type: 'stamp', stampId: stamp.id } });
+          return;
+        }
+
         const edge = edgeWithin(fx, fy, EDGE_HIT_TOLERANCE);
         if (edge && edgeInBounds(level, edge) && getEdge(level, edge) !== null) {
           dispatch({ type: 'select', selection: { type: 'edge', edge } });
         } else {
           dispatch({ type: 'select', selection: { type: 'cell', cell } });
         }
+        return;
+      }
+
+      case 'stamp': {
+        const anchor = stampAnchorAt(level, stampDefinition, fx, fy);
+        if (!anchor) return;
+
+        // Clicking where the same stamp already sits selects it instead of
+        // stacking a duplicate on top.
+        const key = anchorKey(anchor);
+        const existing = Object.values(level.stamps).find(
+          (candidate) =>
+            candidate.stampId === state.activeStampId &&
+            anchorKey(candidate.anchor) === key,
+        );
+        if (existing) {
+          dispatch({ type: 'select', selection: { type: 'stamp', stampId: existing.id } });
+          return;
+        }
+
+        const placed = { id: newId(), stampId: state.activeStampId, anchor };
+        dispatch({ type: 'commitLevel', level: addStamp(level, placed) });
+        dispatch({ type: 'noteStampUsed', stampId: state.activeStampId });
+        dispatch({ type: 'select', selection: { type: 'stamp', stampId: placed.id } });
         return;
       }
 
@@ -345,9 +411,21 @@ export function MapCanvas({ state, dispatch, onHoverChange }: Props) {
           <GridLines level={level} view={view} size={size} />
           <Floors level={level} />
           <Edges level={level} />
+          <Stamps
+            layout={stampLayout}
+            dungeon={state.dungeon}
+            scale={view.scale}
+          />
           {state.rectPreview && <RectPreview rect={state.rectPreview} level={level} />}
-          <HoverIndicator tool={tool} hover={hover} level={level} />
-          <SelectionOverlay state={state} />
+          <HoverIndicator
+            tool={tool}
+            hover={hover}
+            level={level}
+            stampIcon={stampDefinition.icon}
+            stampColour={stampDefinition.colour}
+            stampAnchors={stampDefinition.anchors}
+          />
+          <SelectionOverlay state={state} layout={stampLayout} />
         </g>
       </svg>
     </div>
@@ -527,8 +605,76 @@ function EdgeShape({ edge, kind }: { edge: Edge; kind: EdgeKind }) {
   );
 }
 
-function RectPreview({ rect, level }: { rect: { a: Cell; b: Cell }; level: Level }) {
-  const x0 = Math.max(0, Math.min(rect.a.x, rect.b.x));
+function Stamps({
+  layout,
+  dungeon,
+  scale,
+}: {
+  layout: StampLayout;
+  dungeon: Dungeon;
+  scale: number;
+}) {
+  // Labels are hidden when zoomed out, where they would overlap into noise.
+  const showLabels = scale >= 0.75;
+
+  return (
+    <g className="stamps">
+      {layout.placements.map((placement) => {
+        const definition = resolveStamp(dungeon, placement.stamp.stampId);
+        const colour = placement.stamp.colour ?? definition.colour;
+        const cx = placement.cx * CELL;
+        const cy = placement.cy * CELL;
+        const size = placement.size * CELL;
+
+        return (
+          <g key={placement.stamp.id}>
+            <MapGlyph icon={definition.icon} colour={colour} cx={cx} cy={cy} size={size} />
+            {placement.stamp.note && (
+              <circle
+                cx={cx + size * 0.4}
+                cy={cy - size * 0.4}
+                r={size * 0.13}
+                className="stamp-note-dot"
+              />
+            )}
+            {showLabels && placement.stamp.label && (
+              <text
+                x={cx}
+                y={cy + size * 0.78}
+                className="stamp-label"
+                textAnchor="middle"
+              >
+                {placement.stamp.label}
+              </text>
+            )}
+          </g>
+        );
+      })}
+
+      {layout.overflow.map((badge) => (
+        <g key={badge.anchorKey}>
+          <circle
+            cx={badge.cx * CELL}
+            cy={badge.cy * CELL}
+            r={(badge.size * CELL) / 2.4}
+            className="stamp-overflow"
+          />
+          <text
+            x={badge.cx * CELL}
+            y={badge.cy * CELL}
+            className="stamp-overflow-text"
+            textAnchor="middle"
+            dominantBaseline="central"
+          >
+            +{badge.count}
+          </text>
+        </g>
+      ))}
+    </g>
+  );
+}
+
+function RectPreview({ rect, level }: { rect: { a: Cell; b: Cell }; level: Level }) {  const x0 = Math.max(0, Math.min(rect.a.x, rect.b.x));
   const y0 = Math.max(0, Math.min(rect.a.y, rect.b.y));
   const x1 = Math.min(level.width - 1, Math.max(rect.a.x, rect.b.x));
   const y1 = Math.min(level.height - 1, Math.max(rect.a.y, rect.b.y));
@@ -553,12 +699,43 @@ function HoverIndicator({
   tool,
   hover,
   level,
+  stampIcon,
+  stampColour,
+  stampAnchors,
 }: {
   tool: EditorState['tool'];
   hover: { fx: number; fy: number } | null;
   level: Level;
+  stampIcon: string;
+  stampColour: string;
+  stampAnchors: Array<'cell' | 'edge'>;
 }) {
   if (!hover) return null;
+
+  if (tool === 'stamp') {
+    const anchor = stampAnchorAt(level, { anchors: stampAnchors }, hover.fx, hover.fy);
+    if (!anchor) return null;
+    const placement = soloPlacement(anchor);
+
+    return (
+      <g className="stamp-preview">
+        {anchor.kind === 'edge' && (
+          <line
+            {...edgeGeometry({ x: anchor.x, y: anchor.y, o: anchor.o })}
+            className="edge-hover"
+          />
+        )}
+        <MapGlyph
+          icon={stampIcon}
+          colour={stampColour}
+          cx={placement.cx * CELL}
+          cy={placement.cy * CELL}
+          size={placement.size * CELL}
+          opacity={0.65}
+        />
+      </g>
+    );
+  }
 
   if (tool === 'wall' || tool === 'door') {
     const edge = edgeWithin(hover.fx, hover.fy, 0.5);
@@ -580,6 +757,23 @@ function HoverIndicator({
 
     if (tool === 'eraser') {
       const target = eraseTargetAt(level, hover.fx, hover.fy);
+
+      if (target?.type === 'stamp') {
+        const placement = layoutStamps(level).placements.find(
+          (candidate) => candidate.stamp.id === target.stampId,
+        );
+        if (placement) {
+          return (
+            <circle
+              cx={placement.cx * CELL}
+              cy={placement.cy * CELL}
+              r={(placement.size * CELL) / 1.6}
+              className="stamp-hover stamp-hover--erase"
+            />
+          );
+        }
+      }
+
       if (target?.type === 'edge') {
         const { x1, y1, x2, y2 } = edgeGeometry(target.edge);
         return <line x1={x1} y1={y1} x2={x2} y2={y2} className="edge-hover edge-hover--erase" />;
@@ -600,9 +794,31 @@ function HoverIndicator({
   return null;
 }
 
-function SelectionOverlay({ state }: { state: EditorState }) {
+function SelectionOverlay({
+  state,
+  layout,
+}: {
+  state: EditorState;
+  layout: StampLayout;
+}) {
   const selection = state.selection;
   if (!selection) return null;
+
+  if (selection.type === 'stamp') {
+    const placement = layout.placements.find(
+      (candidate) => candidate.stamp.id === selection.stampId,
+    );
+    if (!placement) return null;
+
+    return (
+      <circle
+        cx={placement.cx * CELL}
+        cy={placement.cy * CELL}
+        r={(placement.size * CELL) / 1.6}
+        className="selection selection--stamp"
+      />
+    );
+  }
 
   if (selection.type === 'cell') {
     return (

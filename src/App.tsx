@@ -3,6 +3,7 @@ import { DungeonFileControls } from './components/DungeonFileControls';
 import { MapCanvas } from './components/MapCanvas';
 import { PropertiesPanel } from './components/PropertiesPanel';
 import { StatusBar } from './components/StatusBar';
+import { StampPalette } from './components/StampPalette';
 import { TOOL_SHORTCUTS, Toolbar } from './components/Toolbar';
 import type { Cell, Dungeon } from './model/types';
 import { usePersistence } from './persistence/usePersistence';
@@ -115,6 +116,7 @@ export function App() {
           tool={state.tool}
           onSelect={(tool) => dispatch({ type: 'setTool', tool })}
         />
+        {state.tool === 'stamp' && <StampPalette state={state} dispatch={dispatch} />}
         <MapCanvas state={state} dispatch={dispatch} onHoverChange={handleHoverChange} />
         <PropertiesPanel state={state} dispatch={dispatch} />
       </div>

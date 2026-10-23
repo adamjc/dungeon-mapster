@@ -12,7 +12,7 @@ function newId(): string {
 }
 
 export function createLevel(name: string, width = DEFAULT_LEVEL_WIDTH, height = DEFAULT_LEVEL_HEIGHT): Level {
-  return { id: newId(), name, width, height, cells: {}, edges: {} };
+  return { id: newId(), name, width, height, cells: {}, edges: {}, stamps: {} };
 }
 
 export function createDungeon(name = 'Untitled Dungeon'): Dungeon {
@@ -23,10 +23,13 @@ export function createDungeon(name = 'Untitled Dungeon'): Dungeon {
     name,
     notes: '',
     levels: [createLevel('Level 1')],
+    customStamps: [],
     createdAt: now,
     updatedAt: now,
   };
 }
+
+export { newId };
 
 export function findLevel(dungeon: Dungeon, levelId: string): Level | undefined {
   return dungeon.levels.find((level) => level.id === levelId);

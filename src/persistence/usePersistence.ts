@@ -46,6 +46,18 @@ export function usePersistence({ dungeon, onLoaded }: Options) {
       })
       .catch((error: unknown) => {
         if (cancelled) return;
+
+        if (error instanceof Error && error.name === 'CorruptStoredDungeonError') {
+          // Autosave deliberately stays off here. Enabling it would overwrite
+          // the stored map with a blank one, destroying data that might still
+          // be recoverable by hand.
+          setStatus({
+            state: 'error',
+            message: `The saved map could not be opened: ${error.message}. Autosave is off so it is not overwritten. Export this map to a file if you want to keep it.`,
+          });
+          return;
+        }
+
         // Without storage the editor still works; only autosave is lost.
         hydratedRef.current = true;
         setStatus({

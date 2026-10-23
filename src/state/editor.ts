@@ -14,6 +14,10 @@ export interface EditorState {
   tool: Tool;
   selection: Selection;
   view: ViewTransform;
+  /** The stamp the Stamp tool will place. */
+  activeStampId: string;
+  /** Most recently placed stamps, newest first. */
+  recentStampIds: string[];
   past: Dungeon[];
   future: Dungeon[];
   /**
@@ -32,7 +36,10 @@ export type EditorAction =
   | { type: 'previewLevel'; level: Level }
   | { type: 'endStroke' }
   | { type: 'commitLevel'; level: Level }
+  | { type: 'commitDungeon'; dungeon: Dungeon }
   | { type: 'setRectPreview'; rect: { a: Cell; b: Cell } | null }
+  | { type: 'setActiveStamp'; stampId: string }
+  | { type: 'noteStampUsed'; stampId: string }
   | { type: 'undo' }
   | { type: 'redo' }
   | { type: 'renameDungeon'; name: string }
@@ -44,6 +51,7 @@ export type EditorAction =
   | { type: 'deleteLevel'; levelId: string };
 
 const MAX_HISTORY = 200;
+const MAX_RECENT_STAMPS = 8;
 
 export function createInitialState(): EditorState {
   const dungeon = createDungeon();
@@ -53,6 +61,8 @@ export function createInitialState(): EditorState {
     tool: 'floor',
     selection: null,
     view: { tx: 48, ty: 48, scale: 1 },
+    activeStampId: 'keyhole',
+    recentStampIds: ['keyhole', 'secretButton', 'lever', 'pit', 'stairsDown'],
     past: [],
     future: [],
     strokeBase: null,
@@ -101,6 +111,21 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
 
     case 'commitLevel':
       return pushHistory(state, state.dungeon, replaceLevel(state.dungeon, action.level));
+
+    case 'commitDungeon':
+      return pushHistory(state, state.dungeon, action.dungeon);
+
+    case 'setActiveStamp':
+      return { ...state, activeStampId: action.stampId, tool: 'stamp' };
+
+    case 'noteStampUsed':
+      return {
+        ...state,
+        recentStampIds: [
+          action.stampId,
+          ...state.recentStampIds.filter((id) => id !== action.stampId),
+        ].slice(0, MAX_RECENT_STAMPS),
+      };
 
     case 'setRectPreview':
       return { ...state, rectPreview: action.rect };

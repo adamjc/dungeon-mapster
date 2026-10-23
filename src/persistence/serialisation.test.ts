@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { eastEdge, northEdge } from '../model/coords';
 import { createDungeon, createLevel } from '../model/dungeon';
-import { drawRoom, setEdges } from '../model/operations';
+import { addStamp, drawRoom, setEdges } from '../model/operations';
 import { SCHEMA_VERSION } from '../model/types';
 import type { Dungeon } from '../model/types';
 import {
   dungeonFileName,
   parseDungeonFile,
+  parseDungeonValue,
   serialiseDungeon,
 } from './serialisation';
 
@@ -180,6 +181,201 @@ describe('tolerant parsing', () => {
       ),
     );
     expect(restored.schemaVersion).toBe(SCHEMA_VERSION);
+  });
+});
+
+describe('stamps', () => {
+  function stamped(): Dungeon {
+    const dungeon = createDungeon('Stamped');
+    let level = drawRoom(dungeon.levels[0], { x: 1, y: 1 }, { x: 5, y: 5 });
+    level = addStamp(level, {
+      id: 'st-1',
+      stampId: 'keyhole',
+      anchor: { kind: 'edge', x: 1, y: 2, o: 'V', facing: 'east' },
+      label: 'Iron key',
+      note: 'Needs the key from level 2',
+      colour: '#5aa9e6',
+    });
+    level = addStamp(level, {
+      id: 'st-2',
+      stampId: 'stairsDown',
+      anchor: { kind: 'cell', x: 3, y: 3 },
+      linkedLevelId: 'other-level',
+    });
+
+    return {
+      ...dungeon,
+      levels: [level],
+      customStamps: [
+        {
+          id: 'custom-1',
+          name: 'Blue rune',
+          category: 'custom',
+          icon: 'rune',
+          colour: '#5aa9e6',
+          anchors: ['edge'],
+          linkable: false,
+          builtIn: false,
+        },
+      ],
+    };
+  }
+
+  it('carries stamps and their details through a round trip', () => {
+    const original = stamped();
+    const restored = expectOk(parseDungeonFile(serialiseDungeon(original)));
+
+    expect(restored.levels[0].stamps).toEqual(original.levels[0].stamps);
+  });
+
+  it('carries custom stamp definitions inside the file', () => {
+    const restored = expectOk(parseDungeonFile(serialiseDungeon(stamped())));
+    expect(restored.customStamps).toHaveLength(1);
+    expect(restored.customStamps[0].name).toBe('Blue rune');
+    expect(restored.customStamps[0].builtIn).toBe(false);
+  });
+
+  it('rejects a facing that its wall cannot have', () => {
+    const file = stamped();
+    const broken = {
+      ...file,
+      levels: [
+        {
+          ...file.levels[0],
+          stamps: {
+            bad: {
+              id: 'bad',
+              stampId: 'keyhole',
+              // A horizontal wall cannot be seen from the east.
+              anchor: { kind: 'edge', x: 1, y: 1, o: 'H', facing: 'east' },
+            },
+          },
+        },
+      ],
+    };
+
+    const result = parseDungeonFile(JSON.stringify(broken));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/faces "east"/i);
+  });
+
+  it('rejects an unknown facing', () => {
+    const result = parseDungeonFile(
+      '{"id":"a","name":"x","levels":[{"id":"l","name":"n","width":4,"height":4,"stamps":{"s":{"stampId":"pit","anchor":{"kind":"edge","x":1,"y":1,"o":"H","facing":"up"}}}}]}',
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/invalid facing/i);
+  });
+
+  it('rejects a stamp that is neither in a square nor on a wall', () => {
+    const result = parseDungeonFile(
+      '{"id":"a","name":"x","levels":[{"id":"l","name":"n","width":4,"height":4,"stamps":{"s":{"stampId":"pit","anchor":{"kind":"ceiling","x":1,"y":1}}}}]}',
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/square or on a wall/i);
+  });
+
+  it('rejects a custom stamp with no way to place it', () => {
+    const result = parseDungeonFile(
+      '{"id":"a","name":"x","customStamps":[{"id":"c","name":"n","category":"custom","icon":"rune","colour":"#fff","anchors":[]}],"levels":[{"id":"l","name":"n","width":4,"height":4}]}',
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/at least one placement/i);
+  });
+
+  it('rejects duplicate custom stamp ids', () => {
+    const one =
+      '{"id":"c","name":"n","category":"custom","icon":"rune","colour":"#fff","anchors":["cell"]}';
+    const result = parseDungeonFile(
+      `{"id":"a","name":"x","customStamps":[${one},${one}],"levels":[{"id":"l","name":"n","width":4,"height":4}]}`,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/same id/i);
+  });
+
+  it('never trusts an imported stamp to be a built-in one', () => {
+    const restored = expectOk(
+      parseDungeonFile(
+        '{"id":"a","name":"x","customStamps":[{"id":"c","name":"n","category":"custom","icon":"rune","colour":"#fff","anchors":["cell"],"builtIn":true}],"levels":[{"id":"l","name":"n","width":4,"height":4}]}',
+      ),
+    );
+    expect(restored.customStamps[0].builtIn).toBe(false);
+  });
+
+  it('opens a version 1 file that predates stamps', () => {
+    const legacy = {
+      format: 'dungeon-mapper',
+      schemaVersion: 1,
+      dungeon: {
+        id: 'old',
+        name: 'Old Map',
+        notes: '',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        levels: [
+          {
+            id: 'l1',
+            name: 'Level 1',
+            width: 32,
+            height: 32,
+            cells: { '1,1': { floor: true } },
+            edges: { '1,1,H': { kind: 'wall' } },
+          },
+        ],
+      },
+    };
+
+    const restored = expectOk(parseDungeonFile(JSON.stringify(legacy)));
+    expect(restored.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(restored.levels[0].stamps).toEqual({});
+    expect(restored.customStamps).toEqual([]);
+    expect(restored.levels[0].cells['1,1']).toEqual({ floor: true });
+  });
+});
+
+describe('reading stored maps', () => {
+  it('migrates a map saved before stamps existed', () => {
+    // Exactly what the previous release wrote to local storage: no `stamps` on
+    // the level and no `customStamps` on the dungeon.
+    const stored = {
+      id: 'old',
+      schemaVersion: 1,
+      name: 'Saved Before Stamps',
+      notes: '',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      levels: [
+        {
+          id: 'l1',
+          name: 'Level 1',
+          width: 48,
+          height: 48,
+          cells: { '2,2': { floor: true } },
+          edges: { '2,2,V': { kind: 'door' } },
+        },
+      ],
+    };
+
+    const result = parseDungeonValue(stored);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.dungeon.levels[0].stamps).toEqual({});
+    expect(result.dungeon.customStamps).toEqual([]);
+    expect(result.dungeon.levels[0].edges['2,2,V']).toEqual({ kind: 'door' });
+    expect(result.dungeon.schemaVersion).toBe(SCHEMA_VERSION);
+  });
+
+  it('reports a stored map it cannot make sense of', () => {
+    const result = parseDungeonValue({ id: 'x', name: 'y', levels: 'not a list' });
+    expect(result.ok).toBe(false);
+  });
+
+  it('round-trips a current map through storage unchanged', () => {
+    const dungeon = createDungeon('Round Trip');
+    const result = parseDungeonValue(JSON.parse(JSON.stringify(dungeon)));
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.dungeon.levels[0].stamps).toEqual({});
   });
 });
 
