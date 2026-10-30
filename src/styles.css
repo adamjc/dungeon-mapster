@@ -227,6 +227,29 @@ button:disabled {
   fill: var(--unmapped);
 }
 
+.resize-handles {
+  pointer-events: none;
+}
+
+.level-outline {
+  fill: none;
+  stroke: var(--grid-major);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.resize-grip {
+  fill: var(--unmapped);
+  stroke: var(--grid-major);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.resize-grip--active {
+  fill: var(--accent);
+  stroke: var(--accent);
+}
+
 .grid-line {
   stroke: var(--grid);
   stroke-width: 1;

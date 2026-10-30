@@ -20,6 +20,13 @@ import {
   stampAnchorAt,
 } from '../model/operations';
 import { newId } from '../model/dungeon';
+import {
+  resizeBounds,
+  resizeCursor,
+  resizeHandleAt,
+  resizeLevel,
+} from '../model/resize';
+import type { ResizeSide } from '../model/resize';
 import { resolveStamp } from '../model/stamps';
 import {
   anchorKey,
@@ -36,7 +43,7 @@ import type {
   Level,
 } from '../model/types';
 import { activeLevel } from '../state/editor';
-import type { EditorAction, EditorState } from '../state/editor';
+import type { EditorAction, EditorState, ViewTransform } from '../state/editor';
 import { MapGlyph } from './StampIcon';
 
 /** World units per dungeon square, before the view scale is applied. */
@@ -44,6 +51,16 @@ export const CELL = 32;
 
 const MIN_SCALE = 0.3;
 const MAX_SCALE = 4;
+
+/**
+ * Grab zone for the level-resize handles, in screen pixels. It reaches much
+ * further outside the level than inside, so the handles do not swallow clicks
+ * meant for the outermost squares and their walls.
+ */
+const RESIZE_GRAB_OUTSIDE_PX = 16;
+const RESIZE_GRAB_INSIDE_PX = 4;
+/** Drawn size of a resize grip, in screen pixels. */
+const RESIZE_GRIP_PX = 10;
 
 type PaintMode =
   | { tool: 'floor' }
@@ -53,7 +70,13 @@ type PaintMode =
 type DragState =
   | { kind: 'pan'; startX: number; startY: number; originTx: number; originTy: number }
   | { kind: 'paint'; working: Level; lastFx: number; lastFy: number; mode: PaintMode }
-  | { kind: 'rect'; anchor: Cell };
+  | { kind: 'rect'; anchor: Cell }
+  /**
+   * Resizing works from the level and view as they were when the drag began:
+   * the origin moves while the boundary is dragged, so measuring against the
+   * live view would feed each adjustment back into the next one.
+   */
+  | { kind: 'resize'; side: ResizeSide; base: Level; baseView: ViewTransform };
 
 interface Props {
   state: EditorState;
@@ -127,6 +150,10 @@ export function MapCanvas({ state, dispatch, onHoverChange }: Props) {
 
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
+      // A resize drag measures the pointer against the view it started with,
+      // so zooming mid-drag is ignored rather than left to fight it.
+      if (dragRef.current?.kind === 'resize') return;
+
       const rect = element.getBoundingClientRect();
       const screenX = event.clientX - rect.left;
       const screenY = event.clientY - rect.top;
@@ -151,17 +178,24 @@ export function MapCanvas({ state, dispatch, onHoverChange }: Props) {
     return () => element.removeEventListener('wheel', onWheel);
   }, [dispatch]);
 
-  const toCellUnits = useCallback((clientX: number, clientY: number) => {
-    const element = containerRef.current;
-    if (!element) return { fx: 0, fy: 0 };
+  const toCellUnits = useCallback(
+    (clientX: number, clientY: number, against?: ViewTransform) => {
+      const element = containerRef.current;
+      if (!element) return { fx: 0, fy: 0 };
 
-    const rect = element.getBoundingClientRect();
-    const current = viewRef.current;
-    return {
-      fx: (clientX - rect.left - current.tx) / current.scale / CELL,
-      fy: (clientY - rect.top - current.ty) / current.scale / CELL,
-    };
-  }, []);
+      const rect = element.getBoundingClientRect();
+      const current = against ?? viewRef.current;
+      return {
+        fx: (clientX - rect.left - current.tx) / current.scale / CELL,
+        fy: (clientY - rect.top - current.ty) / current.scale / CELL,
+      };
+    },
+    [],
+  );
+
+  /** Grab zone and grip size converted from screen pixels to cell units. */
+  const grabOutside = RESIZE_GRAB_OUTSIDE_PX / view.scale / CELL;
+  const grabInside = RESIZE_GRAB_INSIDE_PX / view.scale / CELL;
 
   const handlePointerDown = (event: React.PointerEvent) => {
     const element = containerRef.current;
@@ -183,6 +217,20 @@ export function MapCanvas({ state, dispatch, onHoverChange }: Props) {
     if (event.button !== 0) return;
     const { fx, fy } = toCellUnits(event.clientX, event.clientY);
     const cell = { x: Math.floor(fx), y: Math.floor(fy) };
+
+    // The boundary handles sit above every tool, so a level can be resized
+    // without breaking off whatever is being drawn.
+    const handle = resizeHandleAt(level, fx, fy, grabOutside, grabInside);
+    if (handle) {
+      dragRef.current = { kind: 'resize', side: handle, base: level, baseView: view };
+      // Cell and edge selections are addressed by coordinate, and a resize
+      // that moves the origin renumbers them.
+      if (state.selection && state.selection.type !== 'stamp') {
+        dispatch({ type: 'select', selection: null });
+      }
+      dispatch({ type: 'beginStroke' });
+      return;
+    }
 
     switch (tool) {
       case 'select': {
@@ -318,6 +366,24 @@ export function MapCanvas({ state, dispatch, onHoverChange }: Props) {
       return;
     }
 
+    if (drag.kind === 'resize') {
+      const base = toCellUnits(event.clientX, event.clientY, drag.baseView);
+      const bounds = resizeBounds(drag.base, drag.side, base.fx, base.fy);
+
+      // Growing or shrinking the north or west side moves every square, so the
+      // view slides by the same amount and the map appears to stay put.
+      dispatch({ type: 'previewLevel', level: resizeLevel(drag.base, bounds) });
+      dispatch({
+        type: 'setView',
+        view: {
+          ...drag.baseView,
+          tx: drag.baseView.tx + bounds.x0 * CELL * drag.baseView.scale,
+          ty: drag.baseView.ty + bounds.y0 * CELL * drag.baseView.scale,
+        },
+      });
+      return;
+    }
+
     // Edits accumulate on the drag's own working copy rather than on the
     // rendered level, so a fast drag cannot drop strokes while React catches up.
     let working = drag.working;
@@ -367,7 +433,7 @@ export function MapCanvas({ state, dispatch, onHoverChange }: Props) {
       return;
     }
 
-    if (drag.kind === 'paint') dispatch({ type: 'endStroke' });
+    if (drag.kind === 'paint' || drag.kind === 'resize') dispatch({ type: 'endStroke' });
   };
 
   const cancelDrag = () => {
@@ -377,7 +443,7 @@ export function MapCanvas({ state, dispatch, onHoverChange }: Props) {
 
     if (drag.kind === 'rect') {
       dispatch({ type: 'setRectPreview', rect: null });
-    } else if (drag.kind === 'paint') {
+    } else if (drag.kind === 'paint' || drag.kind === 'resize') {
       dispatch({ type: 'endStroke' });
     }
   };
@@ -387,8 +453,14 @@ export function MapCanvas({ state, dispatch, onHoverChange }: Props) {
     onHoverChange(null);
   };
 
-  const cursor =
-    tool === 'pan'
+  const hoveredHandle =
+    hover && tool !== 'pan'
+      ? resizeHandleAt(level, hover.fx, hover.fy, grabOutside, grabInside)
+      : null;
+
+  const cursor = hoveredHandle
+    ? resizeCursor(hoveredHandle)
+    : tool === 'pan'
       ? 'grab'
       : tool === 'select'
         ? 'default'
@@ -426,6 +498,7 @@ export function MapCanvas({ state, dispatch, onHoverChange }: Props) {
             stampAnchors={stampDefinition.anchors}
           />
           <SelectionOverlay state={state} layout={stampLayout} />
+          <ResizeHandles level={level} scale={view.scale} active={hoveredHandle} />
         </g>
       </svg>
     </div>
@@ -441,6 +514,61 @@ function LevelBackground({ level }: { level: Level }) {
       height={level.height * CELL}
       className="level-bounds"
     />
+  );
+}
+
+/**
+ * Grips on the level boundary, showing where it can be dragged to grow or
+ * shrink the level. Hit testing is geometric and lives on the canvas itself,
+ * so these are decoration only.
+ */
+function ResizeHandles({
+  level,
+  scale,
+  active,
+}: {
+  level: Level;
+  scale: number;
+  active: ResizeSide | null;
+}) {
+  const right = level.width * CELL;
+  const bottom = level.height * CELL;
+  const midX = right / 2;
+  const midY = bottom / 2;
+
+  // Grips are sized in screen pixels so they stay usable at any zoom.
+  const grip = RESIZE_GRIP_PX / scale;
+  const bar = grip * 0.7;
+  const span = grip * 3;
+
+  const grips: Array<{ side: ResizeSide; x: number; y: number; w: number; h: number }> = [
+    { side: 'n', x: midX - span / 2, y: -bar / 2, w: span, h: bar },
+    { side: 's', x: midX - span / 2, y: bottom - bar / 2, w: span, h: bar },
+    { side: 'w', x: -bar / 2, y: midY - span / 2, w: bar, h: span },
+    { side: 'e', x: right - bar / 2, y: midY - span / 2, w: bar, h: span },
+    { side: 'nw', x: -grip / 2, y: -grip / 2, w: grip, h: grip },
+    { side: 'ne', x: right - grip / 2, y: -grip / 2, w: grip, h: grip },
+    { side: 'sw', x: -grip / 2, y: bottom - grip / 2, w: grip, h: grip },
+    { side: 'se', x: right - grip / 2, y: bottom - grip / 2, w: grip, h: grip },
+  ];
+
+  return (
+    <g className="resize-handles">
+      <rect x={0} y={0} width={right} height={bottom} className="level-outline" />
+      {grips.map((item) => (
+        <rect
+          key={item.side}
+          x={item.x}
+          y={item.y}
+          width={item.w}
+          height={item.h}
+          rx={bar / 2}
+          className={
+            item.side === active ? 'resize-grip resize-grip--active' : 'resize-grip'
+          }
+        />
+      ))}
+    </g>
   );
 }
 

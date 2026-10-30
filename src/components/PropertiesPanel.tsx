@@ -151,6 +151,10 @@ function LevelProperties({ level }: { level: Level }) {
       <p className="hint">
         Choose the Select tool and click a square, wall, door or stamp to edit it.
       </p>
+      <p className="hint">
+        Drag the edges or corners of the map to resize the level. It will not
+        shrink over anything you have already mapped.
+      </p>
     </aside>
   );
 }
