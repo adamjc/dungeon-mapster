@@ -1,5 +1,7 @@
 # Dungeon Mapper
 
+![](./screenshot.png)
+
 A 100% vibe-coded project.
 
 A grid-based mapping tool for classic first-person "blobber" dungeon crawlers
