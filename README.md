@@ -1,4 +1,4 @@
-# Dungeon Mapper
+# Dungeon Mapster
 
 ![](./screenshot.png)
 
